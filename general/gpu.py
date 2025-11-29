@@ -80,7 +80,6 @@ class CGPUInfo:
                 rocml.smi_initialize()
                 self.pyamdLoaded = True
                 logger.info('Pyrsmi (AMD) initialized.')
-                return True
             except Exception as e:
                 logger.error('Could not init pyrsmi (AMD).' + str(e))
 
