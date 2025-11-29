@@ -3,6 +3,8 @@ import comfy.model_management
 from ..core import logger
 import os
 import platform
+from ctypes import *
+from pyrsmi import rocml
 
 def is_jetson() -> bool:
     """
@@ -36,6 +38,7 @@ class CGPUInfo:
     cuda = False
     pynvmlLoaded = False
     jtopLoaded = False
+    pyamdLoaded = False
     cudaAvailable = False
     torchDevice = 'cpu'
     cudaDevice = 'cpu'
@@ -73,8 +76,15 @@ class CGPUInfo:
                 logger.error('pynvml is not installed. ' + str(e))
             except Exception as e:
                 logger.error('Could not init pynvml (NVIDIA). ' + str(e))
+            try:
+                rocml.smi_initialize()
+                self.pyamdLoaded = True
+                logger.info('Pyrsmi (AMD) initialized.')
+                return True
+            except Exception as e:
+                logger.error('Could not init pyrsmi (AMD).' + str(e))
 
-        self.anygpuLoaded = self.pynvmlLoaded or self.jtopLoaded
+        self.anygpuLoaded = self.pynvmlLoaded or self.jtopLoaded or self.pyamdLoaded
 
         try:
             self.torchDevice = comfy.model_management.get_torch_device_name(comfy.model_management.get_torch_device())
@@ -86,6 +96,7 @@ class CGPUInfo:
             self.anygpuLoaded = False
             self.pynvmlLoaded = False
             self.jtopLoaded = False
+            self.pyamdLoaded = False
 
         if self.anygpuLoaded:
             if self.deviceGetCount() > 0:
@@ -208,6 +219,8 @@ class CGPUInfo:
         elif self.jtopLoaded:
             # For Jetson devices, we assume there's one GPU
             return 1
+        elif self.pyamdLoaded:
+            return rocml.smi_get_device_count()
         else:
             return 0
 
@@ -216,6 +229,8 @@ class CGPUInfo:
             return self.pynvml.nvmlDeviceGetHandleByIndex(index)
         elif self.jtopLoaded:
             return index  # On Jetson, index acts as handle
+        elif self.pyamdLoaded:
+            return index
         else:
             return 0
 
@@ -244,6 +259,8 @@ class CGPUInfo:
             except Exception as e:
                 logger.error('Could not get GPU name. ' + str(e))
                 return 'Unknown GPU'
+        elif self.pyamdLoaded:
+            return rocml.smi_get_device_name(deviceIndex)
         else:
             return ''
 
@@ -253,6 +270,10 @@ class CGPUInfo:
         elif self.jtopLoaded:
             # No direct method to get driver version from jtop
             return 'NVIDIA Driver: unknown'
+        elif self.pyamdLoaded:
+            ver_str = create_string_buffer(256)
+            rocml.rocm_lib.rsmi_version_str_get(0, ver_str, 256)
+            return f'AMD Driver: {ver_str.value.decode()}'
         else:
             return 'Driver unknown'
 
@@ -267,6 +288,8 @@ class CGPUInfo:
             except Exception as e:
                 logger.error('Could not get GPU utilization. ' + str(e))
                 return -1
+        elif self.pyamdLoaded:
+            return rocml.smi_get_device_utilization(deviceHandle)
         else:
             return 0
 
@@ -279,6 +302,10 @@ class CGPUInfo:
             total = mem_data['tot']
             used = mem_data['used']
             return {'total': total, 'used': used}
+        elif self.pyamdLoaded:
+            mem_used = rocml.smi_get_device_memory_used(deviceHandle)
+            mem_total = rocml.smi_get_device_memory_total(deviceHandle)
+            return {'total': mem_total, 'used': mem_used}
         else:
             return {'total': 1, 'used': 1}
 
@@ -292,6 +319,10 @@ class CGPUInfo:
             except Exception as e:
                 logger.error('Could not get GPU temperature. ' + str(e))
                 return -1
+        elif self.pyamdLoaded:
+            temp = c_int64(0)
+            rocml.rocm_lib.rsmi_dev_temp_metric_get(deviceHandle, 1, 0, byref(temp))
+            return temp.value / 1000
         else:
             return 0
 
